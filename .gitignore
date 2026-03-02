@@ -202,7 +202,7 @@ tox.ini
 *.ipynb
 
 # CI/CD and deployment
-.github/workflows/
+# .github/workflows/
 .travis.yml
 .circleci/
 .gitlab-ci.yml

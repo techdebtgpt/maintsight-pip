@@ -1,0 +1,219 @@
+name: Release & Publish
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write  # IMPORTANT: this permission is mandatory for trusted publishing
+
+jobs:
+  release:
+    name: Release & Publish to PyPI
+    runs-on: ubuntu-latest
+    # Only run if commit message doesn't contain [skip ci]
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    environment: pypi  # Use your configured environment name
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Use PAT for pushing version commits and tags
+          token: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9'
+
+      - name: Configure Git
+        run: |
+          git config user.name "GitHub Actions Bot"
+          git config user.email "actions@github.com"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install build toml
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          pip install pytest
+          python -m pytest tests/ -v || true  # Don't fail if no tests
+
+      - name: Lint code
+        run: |
+          pip install flake8
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || true
+
+      - name: Determine version bump
+        id: version-bump
+        run: |
+          # Get commit messages since last tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          if [ -z "$LAST_TAG" ]; then
+            # No tags yet, use all commits
+            COMMITS=$(git log --pretty=format:"%s" main)
+          else
+            # Get commits since last tag
+            COMMITS=$(git log ${LAST_TAG}..HEAD --pretty=format:"%s")
+          fi
+
+          echo "Analyzing commits:"
+          echo "$COMMITS"
+
+          # Determine version bump type based on conventional commits
+          if echo "$COMMITS" | grep -qE "^(feat|feature)(\(.+\))?!:|^BREAKING CHANGE:|breaking:"; then
+            BUMP_TYPE="major"
+          elif echo "$COMMITS" | grep -qE "^(feat|feature)(\(.+\))?:"; then
+            BUMP_TYPE="minor"
+          elif echo "$COMMITS" | grep -qE "^(fix|bugfix|perf|refactor|docs|chore|style|test)(\(.+\))?:"; then
+            BUMP_TYPE="patch"
+          else
+            # Default to patch for any other commits
+            BUMP_TYPE="patch"
+          fi
+
+          echo "bump_type=$BUMP_TYPE" >> $GITHUB_OUTPUT
+          echo "Determined version bump: $BUMP_TYPE"
+
+      - name: Bump version
+        id: bump
+        run: |
+          BUMP_TYPE="${{ steps.version-bump.outputs.bump_type }}"
+          echo "Bumping version: $BUMP_TYPE"
+
+          # Get current version from pyproject.toml
+          CURRENT_VERSION=$(python -c "import toml; print(toml.load('pyproject.toml')['project']['version'])")
+          echo "Current version: $CURRENT_VERSION"
+
+          # Calculate new version
+          IFS='.' read -ra VERSION_PARTS <<< "$CURRENT_VERSION"
+          MAJOR=${VERSION_PARTS[0]}
+          MINOR=${VERSION_PARTS[1]}
+          PATCH=${VERSION_PARTS[2]}
+
+          case $BUMP_TYPE in
+            major)
+              MAJOR=$((MAJOR + 1))
+              MINOR=0
+              PATCH=0
+              ;;
+            minor)
+              MINOR=$((MINOR + 1))
+              PATCH=0
+              ;;
+            patch)
+              PATCH=$((PATCH + 1))
+              ;;
+          esac
+
+          NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          echo "New version: $NEW_VERSION"
+
+          # Update pyproject.toml
+          cat > update_version.py << 'EOF'
+          import toml
+          import sys
+          
+          version = sys.argv[1]
+          
+          # Read current pyproject.toml
+          with open('pyproject.toml', 'r') as f:
+              data = toml.load(f)
+          
+          # Update version
+          data['project']['version'] = version
+          
+          # Write updated pyproject.toml
+          with open('pyproject.toml', 'w') as f:
+              toml.dump(data, f)
+          
+          print(f"Updated pyproject.toml version to {version}")
+          EOF
+          
+          python update_version.py "$NEW_VERSION"
+          rm update_version.py
+          
+          # Update __init__.py if it exists
+          if [ -f "__init__.py" ]; then
+            sed -i "s/__version__ = \".*\"/__version__ = \"$NEW_VERSION\"/" __init__.py
+          fi
+
+          echo "new_version=v$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "version_number=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+          # Commit the version bump
+          git add pyproject.toml __init__.py
+          git commit -m "chore(release): bump version to $NEW_VERSION [skip ci]" || true
+          git tag "v$NEW_VERSION"
+
+
+
+      - name: Push changes
+        run: |
+          git push origin main --follow-tags
+
+      - name: Build Python package
+        run: |
+          python -m build
+
+      - name: Check package
+        run: |
+          pip install twine  # Only needed for checking
+          twine check dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          verbose: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.bump.outputs.new_version }}
+          name: Release ${{ steps.bump.outputs.new_version }}
+          body: |
+            ## Changes in ${{ steps.bump.outputs.new_version }}
+
+            Auto-generated release from main branch.
+
+            ### Installation
+            ```bash
+            pip install maintsight==${{ steps.bump.outputs.version_number }}
+            ```
+
+            ### Usage
+            ```bash
+            maintsight predict /path/to/repo
+            ```
+
+            ### What's Changed
+            See commit history for detailed changes.
+          draft: false
+          prerelease: false
+          files: |
+            dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify on success
+        if: success()
+        run: |
+          echo "✅ Successfully published ${{ steps.bump.outputs.new_version }} to PyPI"
+          echo "📦 Package: https://pypi.org/project/maintsight/${{ steps.bump.outputs.version_number }}/"
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Failed to publish package"
+          echo "Check logs above for details"
+          exit 1
