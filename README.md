@@ -1,6 +1,6 @@
 # 🔍 MaintSight
 
-[![PyPI version](https://img.shields.io/pypi/v/maintsight.svg)](https://pypi.org/project/maintsight-pip/)
+[![PyPI version](https://img.shields.io/pypi/v/maintsight.svg)](https://pypi.org/project/maintsight/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 
