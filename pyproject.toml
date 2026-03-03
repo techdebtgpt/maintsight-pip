@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "maintsight"
-version = "0.0.1"
+version = "0.0.2"
 description = "AI-powered maintenance risk predictor for git repositories with interactive HTML reports and database integration"
 readme = "README.md"
 requires-python = ">=3.8"
